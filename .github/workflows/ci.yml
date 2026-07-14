@@ -71,38 +71,25 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v8.1.0
-        with:
-          enable-cache: true
-          cache-dependency-glob: |
-            pyproject.toml
-            uv.lock
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.13"
-
-      - name: Install dependencies
-        run: uv sync --frozen --extra dev
+      - name: Setup Python environment
+        uses: ./.github/actions/setup-python-env
 
       - name: Lint
-        run: uv run python -m ruff check $PYTHON_SOURCE_PATHS tests/
+        run: uv run --no-sync python -m ruff check $PYTHON_SOURCE_PATHS tests/
 
       - name: Format check
-        run: uv run python -m ruff format --check $PYTHON_SOURCE_PATHS tests/
+        run: uv run --no-sync python -m ruff format --check $PYTHON_SOURCE_PATHS tests/
 
       - name: Typecheck
-        run: uv run python -m mypy $PYTHON_SOURCE_PATHS
+        run: uv run --no-sync python -m mypy $PYTHON_SOURCE_PATHS
 
       - name: Import graph
-        run: uv run python .github/ci/check_imports.py --strict
+        run: uv run --no-sync python .github/ci/check_imports.py --strict
 
       # Full layered contracts (.importlinter.strict), not the minimal default
       # .importlinter config used by ``make check-imports``.
       - name: Import boundaries
-        run: uv run lint-imports --config .importlinter.strict
+        run: uv run --no-sync lint-imports --config .importlinter.strict
 
   test:
     name: test (${{ matrix.shard }})
@@ -201,21 +188,8 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v8.1.0
-        with:
-          enable-cache: true
-          cache-dependency-glob: |
-            pyproject.toml
-            uv.lock
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.13"
-
-      - name: Install dependencies
-        run: uv sync --frozen --extra dev
+      - name: Setup Python environment
+        uses: ./.github/actions/setup-python-env
 
       - name: Validate pytest marker
         env:
@@ -243,7 +217,7 @@ jobs:
         # A ``run: |`` + ``\`` rewrite can drop/split those paths and yield
         # ``N workers [0 items]`` even when the marker is correct.
         run: >
-          uv run python -m pytest -n auto -v
+          uv run --no-sync python -m pytest -n auto -v
           ${{ matrix.pytest_paths }}
           --cov=config
           --cov=core
@@ -284,21 +258,8 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v8.1.0
-        with:
-          enable-cache: true
-          cache-dependency-glob: |
-            pyproject.toml
-            uv.lock
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.13"
-
-      - name: Install dependencies
-        run: uv sync --frozen --extra dev
+      - name: Setup Python environment
+        uses: ./.github/actions/setup-python-env
 
       - name: Download shard coverage artifacts
         uses: actions/download-artifact@v4
@@ -309,8 +270,8 @@ jobs:
 
       - name: Combine coverage and build report
         run: |
-          uv run python -m coverage combine .
-          uv run python -m coverage html
+          uv run --no-sync python -m coverage combine .
+          uv run --no-sync python -m coverage html
 
       - name: Upload combined coverage
         uses: actions/upload-artifact@v4
@@ -340,28 +301,15 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v8.1.0
-        with:
-          enable-cache: true
-          cache-dependency-glob: |
-            pyproject.toml
-            uv.lock
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.13"
-
-      - name: Install dependencies
-        run: uv sync --frozen --extra dev
+      - name: Setup Python environment
+        uses: ./.github/actions/setup-python-env
 
       - name: Run Kubernetes tests
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: us-east-1
-        run: uv run python -m tests.e2e.kubernetes.test_local
+        run: uv run --no-sync python -m tests.e2e.kubernetes.test_local
 
   should-run-thorough:
     runs-on: ubuntu-latest
@@ -437,21 +385,8 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v8.1.0
-        with:
-          enable-cache: true
-          cache-dependency-glob: |
-            pyproject.toml
-            uv.lock
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.13"
-
-      - name: Install dependencies
-        run: uv sync --frozen --extra dev
+      - name: Setup Python environment
+        uses: ./.github/actions/setup-python-env
 
       - name: Install tracer CLI
         run: |
@@ -464,5 +399,5 @@ jobs:
         timeout-minutes: 2
 
       - name: Run test
-        run: uv run ${{ matrix.command }}
+        run: uv run --no-sync ${{ matrix.command }}
         timeout-minutes: 30
