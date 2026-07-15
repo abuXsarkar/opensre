@@ -257,18 +257,49 @@ def _is_git_repo(cwd: str) -> bool:
     return rc == 0 and out.strip() == "true"
 
 
+def _parse_status_z(out: str) -> list[tuple[str, str]]:
+    """Parse ``git status --porcelain -z`` output into ``(status, path)`` pairs.
+
+    Callers run status with ``-c core.quotepath=false`` and ``-z`` so paths are
+    raw UTF-8 (never C-quoted) and NUL-terminated. That matters: with the default
+    ``core.quotepath=true``, git wraps paths containing spaces or non-ASCII bytes
+    in double quotes and octal escapes (``"na\\303\\257ve.txt"``). The old parser
+    kept those quotes as part of the path, so ``git diff --no-index`` looked for a
+    literally-quoted filename that doesn't exist and silently dropped the content.
+
+    Each record is ``XY<space><path>`` (path at index 3). For rename/copy entries
+    (status ``R``/``C``) git emits the origin path as a separate trailing NUL
+    field; we keep the record's own path — the *new* name, which matches both the
+    on-disk file and ``git diff HEAD`` — and skip that origin field.
+    """
+    fields = out.split("\0")
+    entries: list[tuple[str, str]] = []
+    i = 0
+    while i < len(fields):
+        record = fields[i]
+        # A valid record is "XY <path>" (>= 4 chars). The final NUL yields a
+        # trailing empty field; skip it and any stray blanks.
+        if len(record) < 4:
+            i += 1
+            continue
+        status, path = record[:2], record[3:]
+        entries.append((status, path))
+        # Rename/copy: the origin path is the next NUL-separated field — skip it.
+        i += 2 if status[0] in ("R", "C") else 1
+    return entries
+
+
 def _changed_files(cwd: str) -> list[str]:
-    """Working-tree changes (modified, added, deleted, untracked) via porcelain."""
-    rc, out = _git(["status", "--porcelain"], cwd)
+    """Working-tree changes (modified, added, deleted, untracked) via porcelain.
+
+    ``-c core.quotepath=false`` keeps paths with spaces or non-ASCII characters
+    unquoted and ``-z`` NUL-terminates them, so filenames survive verbatim rather
+    than being C-quoted (which corrupted both this list and the untracked diff).
+    """
+    rc, out = _git(["-c", "core.quotepath=false", "status", "--porcelain", "-z"], cwd)
     if rc != 0:
         return []
-    files: list[str] = []
-    for line in out.splitlines():
-        # porcelain format: "XY <path>" (path starts at column 3)
-        path = line[3:].strip() if len(line) > 3 else line.strip()
-        if path:
-            files.append(path)
-    return files
+    return [path for _, path in _parse_status_z(out) if path]
 
 
 def _untracked_diff(cwd: str) -> str:
@@ -277,12 +308,14 @@ def _untracked_diff(cwd: str) -> str:
     ``git diff HEAD`` only covers tracked paths, so a file Pi *creates* would appear
     in ``changed_files`` with no diff. We list untracked files (``-uall`` expands
     directories into individual files) and render each as an added-content diff via
-    ``git diff --no-index``, which never touches the index.
+    ``git diff --no-index``, which never touches the index. As in ``_changed_files``,
+    ``-c core.quotepath=false``/``-z`` keep special-character paths intact so
+    ``--no-index`` receives the real filename.
     """
-    rc, out = _git(["status", "--porcelain", "-uall"], cwd)
+    rc, out = _git(["-c", "core.quotepath=false", "status", "--porcelain", "-z", "-uall"], cwd)
     if rc != 0:
         return ""
-    untracked = [line[3:].strip() for line in out.splitlines() if line.startswith("??")]
+    untracked = [path for status, path in _parse_status_z(out) if status == "??"]
     chunks: list[str] = []
     for path in untracked[:_MAX_UNTRACKED_FILES]:
         if not path:

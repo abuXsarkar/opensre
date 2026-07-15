@@ -118,11 +118,18 @@ class _FakePopen:
 
 def _git_run_side_effect(diff: str = "diff --git a/foo.py b/foo.py\n+changed\n") -> object:
     def side_effect(cmd: list[str], **_: object) -> MagicMock:
-        sub = cmd[1]  # only git calls reach subprocess.run now
+        # Skip git global options (``-c key=val``) to find the subcommand;
+        # status now runs as ``git -c core.quotepath=false status ... -z``.
+        args = cmd[1:]
+        i = 0
+        while i < len(args) and args[i] == "-c":
+            i += 2
+        sub = args[i] if i < len(args) else ""
         if sub == "rev-parse":
             return MagicMock(returncode=0, stdout="true\n", stderr="")
         if sub == "status":
-            return MagicMock(returncode=0, stdout=" M foo.py\n?? bar.py\n", stderr="")
+            # porcelain ``-z``: NUL-terminated records, no trailing newline.
+            return MagicMock(returncode=0, stdout=" M foo.py\0?? bar.py\0", stderr="")
         if sub == "diff":
             return MagicMock(returncode=0, stdout=diff, stderr="")
         return MagicMock(returncode=0, stdout="", stderr="")
@@ -250,6 +257,52 @@ def test_capture_changes_includes_new_untracked_files(tmp_path: Path) -> None:
     assert "added.py" in changed
     assert "added.py" in diff
     assert "brand new file" in diff  # the new file's content is in the diff
+
+
+def test_capture_changes_handles_spaces_and_non_ascii_filenames(tmp_path: Path) -> None:
+    """Untracked files whose names contain spaces or non-ASCII characters must have
+    their content included in the diff.
+
+    Regression: with the default ``core.quotepath=true``, ``git status --porcelain``
+    C-quotes such paths (``"na\\303\\257ve.txt"``). The old parser passed those
+    quotes to ``git diff --no-index``, which looked for a literally-quoted filename
+    that doesn't exist and silently dropped the content.
+    """
+    from integrations.pi.client import _capture_changes
+
+    _git_init_repo(tmp_path)
+    (tmp_path / "new file.txt").write_text("spaced content here\n", encoding="utf-8")
+    (tmp_path / "naïve.txt").write_text("unicode content here\n", encoding="utf-8")
+
+    changed, diff, _ = _capture_changes(str(tmp_path))
+
+    # Names are reported verbatim — no surrounding quotes or octal escapes.
+    assert "new file.txt" in changed
+    assert "naïve.txt" in changed
+    assert not any('"' in name or "\\" in name for name in changed)
+    # The bug: this content was missing from the diff.
+    assert "spaced content here" in diff
+    assert "unicode content here" in diff
+
+
+def test_changed_files_reports_new_path_for_renames(tmp_path: Path) -> None:
+    """A staged rename must be listed as its new path, not the malformed
+    ``"orig.txt" -> "renamed.txt"`` string the old ``line[3:]`` parse produced."""
+    from integrations.pi.client import _changed_files
+
+    _git_init_repo(tmp_path)  # commits hello.txt
+    subprocess.run(
+        ["git", "mv", "hello.txt", "renamed hello.txt"],
+        cwd=tmp_path,
+        check=True,
+        env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+    )
+
+    changed = _changed_files(str(tmp_path))
+
+    assert "renamed hello.txt" in changed
+    assert not any("->" in name for name in changed)
+    assert "hello.txt" not in changed  # the origin path is not reported as changed
 
 
 def test_build_task_prompt_neutralizes_prompt_injection() -> None:
